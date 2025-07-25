@@ -2,12 +2,12 @@ import { createConfigSchematics } from "@lmstudio/sdk";
 
 export const configSchematics = createConfigSchematics()
 	.field(
-		"max_results",
+		"page_size",
 		"numeric",
 		{
-			displayName: "Maximum Search Results",
+			displayName: "Results Per Page",
 			min: 1,
-			max: 100,
+			max: 10,
 		},
 		10
 	)
@@ -16,12 +16,12 @@ export const configSchematics = createConfigSchematics()
 		"select",
 		{
 			options: [
-				{ value: "on", displayName: "On" },
+				{ value: "strict", displayName: "Strict" },
 				{ value: "moderate", displayName: "Moderate" },
 				{ value: "off", displayName: "Off" },
 			],
-			displayName: "Safe Search Setting",
+			displayName: "Safe Search",
 		},
-		"off"
+		"moderate"
 	)
 	.build();

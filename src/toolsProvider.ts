@@ -9,20 +9,20 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 		description: "Search for web pages on DuckDuckGo using a query string and return a list of URLs.",
 		parameters: {
 			query: z.string().describe("The search query for finding web pages"),
-			max_results: z.number().int().min(1).max(100).optional().default(10).describe("Maximum number of web results to return"),
-			safe_search: z.enum(["on", "moderate", "off"]).optional().default("off").describe("Safe search setting"),
+			page_size: z.number().int().min(1).max(10).optional().default(10).describe("Number of web results per page"),
+			safe_search: z.enum(["strict", "moderate", "off"]).optional().default("moderate").describe("Safe S"),
 			page: z.number().int().min(1).max(100).optional().default(1).describe("Page number for pagination"),
 		},
-		implementation: async ({ query, max_results, safe_search, page }, { status, warn, signal }) => {
+		implementation: async ({ query, page_size, safe_search, page }, { status, warn, signal }) => {
 			status("Initiating DuckDuckGo web search...");
 			try {
 				// Construct the DuckDuckGo API URL
 				const url = new URL("https://duckduckgo.com/html/");
 				url.searchParams.append("q", query);
 				if (safe_search !== "moderate")
-					url.searchParams.append("p", safe_search === "on" ? "1" : "-1");
+					url.searchParams.append("p", safe_search === "strict" ? "1" : "-1");
 				if (page > 1)
-					url.searchParams.append("s", ((max_results * (page - 1)) || 0).toString()); // Start at the appropriate index
+					url.searchParams.append("s", ((page_size * (page - 1)) || 0).toString()); // Start at the appropriate index
 				// Perform the fetch request with abort signal
 				const response = await fetch(url.toString(), {
 					method: "GET",
@@ -38,7 +38,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				const links: [string, string][] = [];
 				const regex = /\shref="[^"]*(https?[^?&"]+)[^>]*>([^<]*)/gm;
 				let match;
-				while (links.length < max_results && (match = regex.exec(html))) {
+				while (links.length < page_size && (match = regex.exec(html))) {
 					const label = match[1].replace(/\s+/g, " ").trim();
 					const url = decodeURIComponent(match[1]);
 					if(!links.some(([existingUrl]) => existingUrl === url))
@@ -67,11 +67,11 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 		description: "Search for images on DuckDuckGo using a query string and return a list of image URLs.",
 		parameters: {
 			query: z.string().describe("The search query for finding images"),
-			max_results: z.number().int().min(1).max(100).optional().default(10).describe("Maximum number of image results to return"),
-			safe_search: z.enum(["on", "moderate", "off"]).optional().default("off").describe("Safe search setting"),
+			page_size: z.number().int().min(1).max(10).optional().default(10).describe("Number of web results per page"),
+			safe_search: z.enum(["strict", "moderate", "off"]).optional().default("moderate").describe("Safe Search"),
 			page: z.number().int().min(1).max(100).optional().default(1).describe("Page number for pagination"),
 		},
-		implementation: async ({ query, max_results, safe_search, page }, { status, warn, signal }) => {
+		implementation: async ({ query, page_size, safe_search, page }, { status, warn, signal }) => {
 			status("Initiating DuckDuckGo image search...");
 
 			try {
@@ -109,9 +109,9 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				searchUrl.searchParams.append("vqd", vqd);
 				searchUrl.searchParams.append("f", ",,,,,");
 				if(safe_search !== "moderate")
-					searchUrl.searchParams.append("p", safe_search === "on" ? "1" : "-1");
+					searchUrl.searchParams.append("p", safe_search === "strict" ? "1" : "-1");
 				if (page > 1)
-					searchUrl.searchParams.append("s", ((max_results * (page - 1)) || 0).toString()); // Start at the appropriate index
+					searchUrl.searchParams.append("s", ((page_size * (page - 1)) || 0).toString()); // Start at the appropriate index
 
 				const searchResponse = await fetch(searchUrl.toString(), {
 					method: "GET",
@@ -129,7 +129,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				const data = await searchResponse.json();
 				const imageResults = data.results || [];
 				const imageUrls = imageResults
-					.slice(0, max_results)
+					.slice(0, page_size)
 					.map((result: any) => result.image)
 					.filter((url: string) => url && url.match(/\.(jpg|png|gif|jpeg)$/i));
 
