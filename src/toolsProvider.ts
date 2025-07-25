@@ -1,6 +1,10 @@
 import { tool, Tool, ToolsProviderController } from "@lmstudio/sdk";
 import { z } from "zod";
 
+const headers = {
+	'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
+};
+
 export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]> {
 	const tools: Tool[] = [];
 
@@ -10,7 +14,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 		parameters: {
 			query: z.string().describe("The search query for finding web pages"),
 			page_size: z.number().int().min(1).max(10).optional().default(10).describe("Number of web results per page"),
-			safe_search: z.enum(["strict", "moderate", "off"]).optional().default("moderate").describe("Safe S"),
+			safe_search: z.enum(["strict", "moderate", "off"]).optional().default("moderate").describe("Safe Search"),
 			page: z.number().int().min(1).max(100).optional().default(1).describe("Page number for pagination"),
 		},
 		implementation: async ({ query, page_size, safe_search, page }, { status, warn, signal }) => {
@@ -27,6 +31,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				const response = await fetch(url.toString(), {
 					method: "GET",
 					signal,
+					headers,
 				});
 				if (!response.ok) {
 					warn(`Failed to fetch search results: ${response.statusText}`);
@@ -39,9 +44,9 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				const regex = /\shref="[^"]*(https?[^?&"]+)[^>]*>([^<]*)/gm;
 				let match;
 				while (links.length < page_size && (match = regex.exec(html))) {
-					const label = match[1].replace(/\s+/g, " ").trim();
+					const label = match[2].replace(/\s+/g, " ").trim();
 					const url = decodeURIComponent(match[1]);
-					if(!links.some(([existingUrl]) => existingUrl === url))
+					if(!links.some(([,existingUrl]) => existingUrl === url))
 						links.push([label, url]);
 				}
 				if (links.length === 0) {
@@ -67,13 +72,12 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 		description: "Search for images on DuckDuckGo using a query string and return a list of image URLs.",
 		parameters: {
 			query: z.string().describe("The search query for finding images"),
-			page_size: z.number().int().min(1).max(10).optional().default(10).describe("Number of web results per page"),
+			page_size: z.number().int().min(1).max(10).optional().default(10).describe("Number of image results per page"),
 			safe_search: z.enum(["strict", "moderate", "off"]).optional().default("moderate").describe("Safe Search"),
 			page: z.number().int().min(1).max(100).optional().default(1).describe("Page number for pagination"),
 		},
 		implementation: async ({ query, page_size, safe_search, page }, { status, warn, signal }) => {
 			status("Initiating DuckDuckGo image search...");
-
 			try {
 				// Step 1: Fetch the vqd token
 				const initialUrl = new URL("https://duckduckgo.com/");
@@ -84,6 +88,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				const initialResponse = await fetch(initialUrl.toString(), {
 					method: "GET",
 					signal,
+					headers,
 				});
 
 				if (!initialResponse.ok) {
@@ -116,9 +121,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				const searchResponse = await fetch(searchUrl.toString(), {
 					method: "GET",
 					signal,
-					headers: {
-						'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
-					},
+					headers,
 				});
 
 				if (!searchResponse.ok) {
@@ -151,6 +154,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 			}
 		},
 	});
+
 
 	tools.push(duckDuckGoWebSearchTool);
 	tools.push(duckDuckGoImageSearchTool);

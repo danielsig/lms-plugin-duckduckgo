@@ -5,11 +5,11 @@ export const configSchematics = createConfigSchematics()
 		"page_size",
 		"numeric",
 		{
-			displayName: "Results Per Page",
+			displayName: "Search Results Per Page",
 			min: 1,
 			max: 10,
 		},
-		10
+		5
 	)
 	.field(
 		"safe_search",

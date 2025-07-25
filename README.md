@@ -23,3 +23,5 @@ The search tool has the following settings:
 With the plugin enabled, you can explicitly instruct the assistant to search the web or show you images but you can also ask a question to which one would normally need to search the web to give a proper answer and the assistant will use the tool accordingly.
 
 Pagination is also supported which allows the assistant to provide more results if needed.
+
+This plugin works well in combination with the [Visit Website Tool](https://github.com/danielsig/lms-plugin-visit-website) which can be used to extract basic content from URLs.
