@@ -9,14 +9,14 @@ The plugin is available for download on the
 
 ![click the "Run in LM Studio" button](/docs/assets/how_to_install_on_lm_studio_hub.png)
 
-## Settings
+## Configuration
 
-![DuckDuckGo Search Tool Settings](/docs/assets/settings.png)
+![DuckDuckGo Search Tool Configuration](/docs/assets/configuration.png)
 
-The search tool has the following settings:
+The search tool has the following configurations:
 
-- **Results Per Page** - The maximum number of search results per page.
-- **Safe Search** - The level of safe search to apply (off, moderate, strict).
+- **Search Results Per Page** - The maximum number of search results per page. Leave this at 0 to let the assistant decide how many results to return.
+- **Safe Search** - The level of safe search to apply (off, moderate, strict). Leave this at `Auto` to let the assistant decide if safe search should be applied.
   
 ## How to use
 

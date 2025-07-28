@@ -3,5 +3,5 @@
 	"runner": "node",
 	"owner": "danielsig",
 	"name": "duckduckgo",
-	"revision": 4
+	"revision": 5
 }
