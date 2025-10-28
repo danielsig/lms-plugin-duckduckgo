@@ -5,7 +5,80 @@ import { writeFile } from "fs/promises";
 import { configSchematics } from "./config";
 // import { search, searchImages, SafeSearchType } from "duck-duck-scrape";
 
+const regionEnum = [
+  "",
+  "ar-es",
+  "au-en",
+  "at-de",
+  "be-fr",
+  "be-nl",
+  "br-pt",
+  "bg-bg",
+  "ca-en",
+  "ca-fr",
+  "ct-ca",
+  "cl-es",
+  "cn-zh",
+  "co-es",
+  "hr-hr",
+  "cz-cs",
+  "dk-da",
+  "ee-et",
+  "fi-fi",
+  "fr-fr",
+  "de-de",
+  "gr-el",
+  "hk-tzh",
+  "hu-hu",
+  "is-is",
+  "in-en",
+  "id-en",
+  "ie-en",
+  "il-en",
+  "it-it",
+  "jp-jp",
+  "kr-kr",
+  "lv-lv",
+  "lt-lt",
+  "my-en",
+  "mx-es",
+  "nl-nl",
+  "nz-en",
+  "no-no",
+  "pk-en",
+  "pe-es",
+  "ph-en",
+  "pl-pl",
+  "pt-pt",
+  "ro-ro",
+  "ru-ru",
+  "xa-ar",
+  "sg-en",
+  "sk-sk",
+  "sl-sl",
+  "za-en",
+  "es-ca",
+  "es-es",
+  "se-sv",
+  "ch-de",
+  "ch-fr",
+  "tw-tzh",
+  "th-en",
+  "tr-tr",
+  "us-en",
+  "us-es",
+  "ua-uk",
+  "uk-en",
+  "vn-en"
+];
 
+const periodEnum = [
+	'',
+	'past-day',
+	'past-week',
+	'past-month',
+	'past-year'
+];
 
 export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]> {
 	const tools: Tool[] = [];
@@ -29,8 +102,10 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 			pageSize: z.number().int().min(1).max(10).optional().describe("Number of web results per page"),
 			safeSearch: z.enum(["strict", "moderate", "off"]).optional().describe("Safe Search"),
 			page: z.number().int().min(1).max(100).optional().default(1).describe("Page number for pagination"),
+			region: z.enum(regionEnum).optional().default('').describe("Region of search"),
+			period: z.enum(periodEnum).optional().default('').describe("Period of search")
 		},
-		implementation: async ({ query, pageSize, safeSearch, page }, { status, warn, signal }) => {
+		implementation: async ({ query, pageSize, safeSearch, page, region, period }, { status, warn, signal }) => {
 			status("Initiating DuckDuckGo web search...");
 			await waitIfNeeded(); // Wait if needed to avoid rate limiting
 			try {
@@ -47,6 +122,10 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				url.searchParams.append("q", query);
 				if (safeSearch !== "moderate")
 					url.searchParams.append("p", safeSearch === "strict" ? "-1" : "1");
+				if (region !== "")
+					url.searchParams.append("kl", region);
+				if (period !== "")
+					url.searchParams.append("df", period[5]);
 				if (page > 1)
 					url.searchParams.append("s", ((pageSize * (page - 1)) || 0).toString()); // Start at the appropriate index
 				// Perform the fetch request with abort signal
