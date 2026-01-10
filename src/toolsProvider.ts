@@ -3,8 +3,6 @@ import { z } from "zod";
 import { join } from "path";
 import { writeFile } from "fs/promises";
 import { configSchematics } from "./config";
-// import { search, searchImages, SafeSearchType } from "duck-duck-scrape";
-
 
 
 export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]> {
@@ -42,7 +40,6 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 					?? "moderate";
 				
 				// Construct the DuckDuckGo API URL
-				const headers = spoofHeaders();
 				const url = new URL("https://duckduckgo.com/html/");
 				url.searchParams.append("q", query);
 				if (safeSearch !== "moderate")
@@ -54,7 +51,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				const response = await fetch(url.toString(), {
 					method: "GET",
 					signal,
-					headers,
+					headers: spoofHeaders(),
 				});
 				if (!response.ok) {
 					warn(`Failed to fetch search results: ${response.statusText}`);
@@ -112,7 +109,6 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 					?? "moderate";
 					
 				// // Step 1: Fetch the vqd token
-				const headers = spoofHeaders();
 				const initialUrl = new URL("https://duckduckgo.com/");
 				initialUrl.searchParams.append("q", query);
 				initialUrl.searchParams.append("iax", "images");
@@ -121,10 +117,11 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				const initialResponse = await fetch(initialUrl.toString(), {
 					method: "GET",
 					signal,
-					headers,
+					headers: spoofHeaders()
 				});
+                const responseOk = initialResponse.ok;
 
-				if (!initialResponse.ok) {
+				if (!responseOk) {
 					warn(`Failed to fetch initial response: ${initialResponse.statusText}`);
 					return `Error: Failed to fetch initial response: ${initialResponse.statusText}`;
 				}
@@ -145,19 +142,20 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				searchUrl.searchParams.append("o", "json");
 				searchUrl.searchParams.append("l", "us-en"); // Global region
 				searchUrl.searchParams.append("vqd", vqd);
-				searchUrl.searchParams.append("f", ",,,,,");
 				if(safeSearch !== "moderate")
 					searchUrl.searchParams.append("p", safeSearch === "strict" ? "-1" : "1");
 				if (page > 1)
 					searchUrl.searchParams.append("s", ((pageSize * (page - 1)) || 0).toString()); // Start at the appropriate index
 
+                console.log("Searching images with URL:", searchUrl.toString());
 				const searchResponse = await fetch(searchUrl.toString(), {
 					method: "GET",
 					signal,
-					headers,
+					headers: spoofHeadersImage(),
 				});
+				let searchResponseOk = searchResponse.ok
 
-				if (!searchResponse.ok) {
+				if (!searchResponseOk) {
 					warn(`Failed to fetch image results: ${searchResponse.statusText}`);
 					return `Error: Failed to fetch image results: ${searchResponse.statusText}`;
 				}
@@ -174,25 +172,12 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 
 				status(`Found ${imageURLs.length} images. Fetching...`);
 
-				// const ddgSafeSearch =
-				// 	{
-				// 		strict: SafeSearchType.STRICT,
-				// 		moderate: SafeSearchType.MODERATE,
-				// 		off: SafeSearchType.OFF,
-				// 	}[safeSearch] || SafeSearchType.MODERATE;
-				// const offset = pageSize * (page - 1);
-
-				// const results = await searchImages(query, {
-				// 	offset,
-				// 	safeSearch: ddgSafeSearch,
-				// });
-				// const imageURLs = results.results.map(img => img.image);
-
 				// Download images to ensure they are accessible
 				const workingDirectory = ctl.getWorkingDirectory();
 				const timestamp = Date.now();
 				const downloadPromises = imageURLs.map(async (url: string, i: number) => {
 					const index = i + 1;
+					console.log(`Fetching image ${url}...`)
 					try {
 						const imageResponse = await fetch(url, {
 							method: "GET",
@@ -278,17 +263,12 @@ const spoofedUserAgents = [
 function spoofHeaders(){
 	return {
 		'User-Agent': spoofedUserAgents[Math.floor(Math.random() * spoofedUserAgents.length)],
-		'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-		'Accept-Language': 'en-US,en;q=0.9',
-		'Accept-Encoding': 'gzip, deflate, br',
-		'Connection': 'keep-alive',
+	};
+}
+
+function spoofHeadersImage(){
+	return {
 		'Referer': 'https://duckduckgo.com/',
-		'Origin': 'https://duckduckgo.com',
-		'Upgrade-Insecure-Requests': '1',
-		'Sec-Fetch-Dest': 'document',
-		'Sec-Fetch-Mode': 'navigate',
-		'Sec-Fetch-Site': 'same-origin',
-		'Sec-Fetch-User': '?1',
-		'Cache-Control': 'max-age=0',
+		'Sec-Fetch-Mode': 'cors'
 	};
 }
