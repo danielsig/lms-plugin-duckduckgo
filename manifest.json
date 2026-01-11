@@ -1,7 +1,7 @@
 {
 	"type": "plugin",
 	"runner": "node",
-	"owner": "danielsig",
+	"owner": "swiatek25",
 	"name": "duckduckgo",
-	"revision": 5
+	"revision": 6
 }
