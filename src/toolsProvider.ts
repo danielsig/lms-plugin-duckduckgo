@@ -47,7 +47,6 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				if (page > 1)
 					url.searchParams.append("s", ((pageSize * (page - 1)) || 0).toString()); // Start at the appropriate index
 				// Perform the fetch request with abort signal
-				console.log(`Fetching DuckDuckGo search results for query: ${url.toString() }`);
 				const response = await fetch(url.toString(), {
 					method: "GET",
 					signal,
@@ -119,9 +118,8 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 					signal,
 					headers: spoofHeaders()
 				});
-                const responseOk = initialResponse.ok;
 
-				if (!responseOk) {
+				if (!initialResponse.ok) {
 					warn(`Failed to fetch initial response: ${initialResponse.statusText}`);
 					return `Error: Failed to fetch initial response: ${initialResponse.statusText}`;
 				}
@@ -147,15 +145,13 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				if (page > 1)
 					searchUrl.searchParams.append("s", ((pageSize * (page - 1)) || 0).toString()); // Start at the appropriate index
 
-                console.log("Searching images with URL:", searchUrl.toString());
 				const searchResponse = await fetch(searchUrl.toString(), {
 					method: "GET",
 					signal,
 					headers: spoofHeadersImage(),
 				});
-				let searchResponseOk = searchResponse.ok
 
-				if (!searchResponseOk) {
+				if (!searchResponse.ok) {
 					warn(`Failed to fetch image results: ${searchResponse.statusText}`);
 					return `Error: Failed to fetch image results: ${searchResponse.statusText}`;
 				}
@@ -177,7 +173,6 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				const timestamp = Date.now();
 				const downloadPromises = imageURLs.map(async (url: string, i: number) => {
 					const index = i + 1;
-					console.log(`Fetching image ${url}...`)
 					try {
 						const imageResponse = await fetch(url, {
 							method: "GET",
