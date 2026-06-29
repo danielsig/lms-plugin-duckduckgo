@@ -1,3 +1,4 @@
 .lmstudio
 node_modules
 .idea
+.claude/
