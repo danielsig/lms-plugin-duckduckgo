@@ -53,8 +53,15 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 					return `Error: Failed to fetch search results: ${response.statusText}`;
 				}
 				let html = await response.text();
-				if (html.includes('id="challenge-form"'))
-					return "Error: DuckDuckGo CAPTCHA blocked the search. Try again later.";
+				if (html.includes('id="challenge-form"')) {
+					// CAPTCHA detected, wait 4 seconds and retry
+					await new Promise(resolve => setTimeout(resolve, 4000));
+					const retry = await post(body);
+					if (!retry.ok) return `Error: Failed to fetch search results: ${retry.statusText}`;
+					html = await retry.text();
+					if (html.includes('id="challenge-form"'))
+						return "Error: DuckDuckGo CAPTCHA blocked the search. Try again later.";
+				}
 
 				if (page > 1) {
 					const vqd = extractVqd(html);
@@ -80,6 +87,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				while (links.length < pageSize && (match = regex.exec(html))) {
 					const label = match[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
 					const url = decodeURIComponent(match[1]);
+					if (new URL(url).hostname.endsWith('duckduckgo.com')) continue;
 					if (!links.some(([, existingUrl]) => existingUrl === url))
 						links.push([label, url]);
 				}
@@ -197,6 +205,10 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 							warn(`Failed to fetch image ${index}: ${imageResponse.statusText}`);
 							return null; // Skip this image if download fails
 						}
+						if (!imageResponse.headers.get('content-type')?.startsWith('image/')) {
+							warn(`Image ${index} is not an image: ${url}`);
+							return null;
+						}
 						const bytes = await imageResponse.bytes();
 						if (bytes.length === 0) {
 							warn(`Image ${index} is empty: ${url}`);
@@ -284,6 +296,7 @@ function spoofHeaders(){
 
 function spoofHeadersImage(){
 	return {
+		...spoofHeaders(),
 		'Referer': 'https://duckduckgo.com/',
 		'Sec-Fetch-Mode': 'cors'
 	};
