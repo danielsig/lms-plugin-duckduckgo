@@ -6,7 +6,7 @@ import { configSchematics } from "./config";
 
 
 export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]> {
-	const tools: Tool[] = [];
+	const tools:Tool[] = [];
 
 	let lastRequestTimestamp = 0;
 	const TIME_BETWEEN_REQUESTS = 2000; // 2 seconds
@@ -40,56 +40,71 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 					?? "moderate";
 				
 				// Construct the DuckDuckGo API URL
-				const url = new URL("https://duckduckgo.com/html/");
-				url.searchParams.append("q", query);
-				if (safeSearch !== "moderate")
-					url.searchParams.append("p", safeSearch === "strict" ? "-1" : "1");
-				if (page > 1)
-					url.searchParams.append("s", ((pageSize * (page - 1)) || 0).toString()); // Start at the appropriate index
-				// Perform the fetch request with abort signal
-				const response = await fetch(url.toString(), {
-					method: "GET",
-					signal,
-					headers: spoofHeaders(),
-				});
+				const url = "https://html.duckduckgo.com/html/";
+				const headers = { ...spoofHeaders(), "Content-Type": "application/x-www-form-urlencoded", "Referer": url };
+				const post = (body:URLSearchParams) => fetch(url, { method: "POST", signal, headers, body });
+				const safeSearchParam = safeSearch !== "moderate" ? safeSearch === "strict" ? "-1" : "1" : undefined;
+				const body = new URLSearchParams({ q: query, kl: "wt-wt", b: "" });
+				if (safeSearchParam) body.set("p", safeSearchParam);
+
+				const response = await post(body);
 				if (!response.ok) {
 					warn(`Failed to fetch search results: ${response.statusText}`);
 					return `Error: Failed to fetch search results: ${response.statusText}`;
 				}
-				const html = await response.text();
-				// Extract web results using regex (simplified parsing for demonstration)
-				// Note: In production, consider using a proper HTML parser like jsdom
+				let html = await response.text();
+				if (html.includes('id="challenge-form"'))
+					return "Error: DuckDuckGo CAPTCHA blocked the search. Try again later.";
+
+				if (page > 1) {
+					const vqd = extractVqd(html);
+					if (!vqd) return "Error: Unable to paginate search results.";
+					await new Promise(resolve => setTimeout(resolve, 2000));
+					const offset = parseInt(html.match(/name="s"[^>]*value="(\d+)"/)?.[1] ?? "10") + (page - 2) * 15;
+					const pageBody = new URLSearchParams({ q: query, kl: "wt-wt", vqd, nextParams: "", api: "d.js", o: "json", v: "l", s: offset.toString(), dc: (offset + 1).toString() });
+					if (safeSearchParam) pageBody.set("p", safeSearchParam);
+					const pageResponse = await post(pageBody);
+					if (!pageResponse.ok) {
+						warn(`Failed to fetch page ${page}: ${pageResponse.statusText}`);
+						return `Error: Failed to fetch page ${page}: ${pageResponse.statusText}`;
+					}
+					html = await pageResponse.text();
+					if (html.includes('id="challenge-form"'))
+						return "Error: DuckDuckGo CAPTCHA blocked pagination. Try again later.";
+				}
+
+				// Extract web results using regex
 				const links: [string, string][] = [];
-				const regex = /\shref="[^"]*(https?[^?&"]+)[^>]*>([^<]*)/gm;
+				const regex = /\shref="[^"]*(https?[^?&"]+)[^>]*>([\s\S]*?)<\/a>/gm;
 				let match;
 				while (links.length < pageSize && (match = regex.exec(html))) {
-					const label = match[2].replace(/\s+/g, " ").trim();
+					const label = match[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
 					const url = decodeURIComponent(match[1]);
-					if(!links.some(([,existingUrl]) => existingUrl === url))
+					if (!links.some(([, existingUrl]) => existingUrl === url))
 						links.push([label, url]);
 				}
-				if (links.length === 0) {
+				if (links.length === 0)
 					return "No web pages found for the query.";
-				}
 				status(`Found ${links.length} web pages.`);
-				return {
-					links,
-					count: links.length,
-				};
-			} catch (error: any) {
+				return { links, count: links.length, page };
+			} catch (error:unknown) {
 				if (error instanceof DOMException && error.name === "AbortError") {
 					return "Search aborted by user.";
 				}
+				if (error instanceof Error) {
+					console.error(error);
+					warn(`Error during search: ${error.message}`);
+					return `Error: ${error.message}`;
+				}
 				console.error(error);
-				warn(`Error during search: ${error.message}`);
-				return `Error: ${error.message}`;
+				return "Unknown error occurred during search.";
 			}
 		},
 	});
 
 	const duckDuckGoImageSearchTool = tool({
 		name: "Image Search",
-		description: "Search for images on DuckDuckGo using a query string and return a list of image URLs.",
+		description: "Search for images on DuckDuckGo using a query string. Downloads matching images into the chat working directory and returns markdown image references (![alt](path)). Write each returned line directly into your reply as plain markdown (not in a code blocks) so the images display inline.",
 		parameters: {
 			query: z.string().describe("The search query for finding images"),
 			pageSize: z.number().int().min(1).max(10).optional().default(10).describe("Number of image results per page"),
@@ -125,7 +140,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				}
 
 				const initialHtml = await initialResponse.text();
-				const vqd = initialHtml.match(/vqd="([^"]+)"/)?.[1] as string;
+				const vqd = extractVqd(initialHtml);
 				if (!vqd) {
 					warn("Failed to extract vqd token.");
 					return "Error: Unable to extract vqd token.";
@@ -135,33 +150,33 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				await new Promise(resolve => setTimeout(resolve, 1000));
 
 				// Step 3: Fetch image results using the i.js endpoint
-				const searchUrl = new URL("https://duckduckgo.com/i.js");
-				searchUrl.searchParams.append("q", query);
-				searchUrl.searchParams.append("o", "json");
-				searchUrl.searchParams.append("l", "us-en"); // Global region
-				searchUrl.searchParams.append("vqd", vqd);
-				if(safeSearch !== "moderate")
-					searchUrl.searchParams.append("p", safeSearch === "strict" ? "-1" : "1");
-				if (page > 1)
-					searchUrl.searchParams.append("s", ((pageSize * (page - 1)) || 0).toString()); // Start at the appropriate index
+				const fetchImgBatch = async (s?:number) => {
+					const url = new URL("https://duckduckgo.com/i.js");
+					url.searchParams.append("q", query);
+					url.searchParams.append("o", "json");
+					url.searchParams.append("l", "us-en"); // Global region
+					url.searchParams.append("vqd", vqd);
+					if (safeSearch !== "moderate")
+						url.searchParams.append("p", safeSearch === "strict" ? "-1" : "1");
+					if (s !== undefined)
+						url.searchParams.append("s", s.toString()); // Start at the appropriate index
+					const res = await fetch(url.toString(), { method: "GET", signal, headers: spoofHeadersImage() });
+					if (!res.ok)
+						throw new Error(`Failed to fetch image results: ${res.statusText}`);
+					const data = await res.json() as { results: { image:string }[] };
+					return (data.results || [])
+						.map(r => r.image)
+						.filter((url):url is string => !!url && /\.(jpg|jpeg|png|gif|webp|avif)$/i.test(url));
+				};
 
-				const searchResponse = await fetch(searchUrl.toString(), {
-					method: "GET",
-					signal,
-					headers: spoofHeadersImage(),
-				});
-
-				if (!searchResponse.ok) {
-					warn(`Failed to fetch image results: ${searchResponse.statusText}`);
-					return `Error: Failed to fetch image results: ${searchResponse.statusText}`;
+				const offset = pageSize * (page - 1);
+				const batch1 = await fetchImgBatch();
+				let allImages = batch1;
+				if (offset + pageSize > batch1.length) {
+					await new Promise(resolve => setTimeout(resolve, 2000));
+					allImages = [...batch1, ...await fetchImgBatch(batch1.length)];
 				}
-
-				const data = await searchResponse.json();
-				const imageResults = data.results || [];
-				const imageURLs = imageResults
-					.slice(0, pageSize)
-					.map((result: any) => result.image)
-					.filter((url: string) => url && url.match(/\.(jpg|png|gif|jpeg)$/i));
+				const imageURLs = allImages.slice(offset, offset + pageSize);
 
 				if (imageURLs.length === 0)
 					return "No images found for the query.";
@@ -171,7 +186,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				// Download images to ensure they are accessible
 				const workingDirectory = ctl.getWorkingDirectory();
 				const timestamp = Date.now();
-				const downloadPromises = imageURLs.map(async (url: string, i: number) => {
+				const downloadPromises = imageURLs.map(async (url:string, i:number) => {
 					const index = i + 1;
 					try {
 						const imageResponse = await fetch(url, {
@@ -196,23 +211,23 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 						const localPath = filePath.replace(/\\/g, '/').replace(/^C:/, '') // Normalize path for web compatibility
 						await writeFile(filePath, bytes, 'binary');
 						return localPath;
-					} catch (error: any) {
+					} catch (error:unknown) {
 						if (error instanceof DOMException && error.name === "AbortError")
 							return null; // Skip if download was aborted
-						warn(`Error fetching image ${index}: ${error.message}`);
+						if (error instanceof Error)
+							warn(`Error fetching image ${index}: ${error.message}`);
 						return null; // Skip this image on error
 					}
 				});
-				const downloadedImageURLs = (await Promise.all(downloadPromises)).map(x => x || 'Error downloading image');
-				if (downloadedImageURLs.length === 0) {
+				const downloadedPaths = await Promise.all(downloadPromises);
+				const result = downloadedPaths.filter(Boolean).map((p, i) => `![Image ${i + 1}](${p})`);
+				if (result.length === 0) {
 					warn('Error fetching images');
 					return imageURLs;
 				}
-
-				status(`Downloaded ${downloadedImageURLs.length} images successfully.`);
-
-				return downloadedImageURLs;
-			} catch (error: any) {
+				status(`Downloaded ${result.length} images successfully.`);
+				return result;
+			} catch (error:any) {
 				if (error instanceof DOMException && error.name === "AbortError") {
 					return "Search aborted by user.";
 				}
@@ -229,8 +244,14 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 	return tools;
 }
 
-const undefinedIfAuto = (value: unknown, autoValue: unknown) =>
+const undefinedIfAuto = (value:unknown, autoValue:unknown) =>
 	value === autoValue ? undefined : value as undefined;
+
+function extractVqd(html:string) {
+	return html.match(/name="vqd"[^>]*value="([^"]+)"/)?.[1]
+		?? html.match(/vqd="([^"]+)"/)?.[1]
+		?? html.match(/vqd=([\d-]+)/)?.[1];
+}
 
 const spoofedUserAgents = [
 	// Random spoofed realistic user agents for DuckDuckGo
