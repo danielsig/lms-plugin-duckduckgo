@@ -96,15 +96,12 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				status(`Found ${links.length} web pages.`);
 				return { links, count: links.length, page };
 			} catch (error:unknown) {
-				if (error instanceof DOMException && error.name === "AbortError") {
+				if (error instanceof DOMException && error.name === "AbortError")
 					return "Search aborted by user.";
-				}
 				if (error instanceof Error) {
-					console.error(error);
 					warn(`Error during search: ${error.message}`);
 					return `Error: ${error.message}`;
 				}
-				console.error(error);
 				return "Unknown error occurred during search.";
 			}
 		},
@@ -232,33 +229,105 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 					}
 				});
 				const downloadedPaths = await Promise.all(downloadPromises);
-				const result = downloadedPaths.filter(Boolean).map((p, i) => `![Image ${i + 1}](${p})`);
+				const result = downloadedPaths.filter(Boolean).map((p, i) => '!' + toMarkdownLink(`Image ${i + 1}`, p!));
 				if (result.length === 0) {
 					warn('Error fetching images');
 					return imageURLs;
 				}
 				status(`Downloaded ${result.length} images successfully.`);
 				return result;
-			} catch (error:any) {
-				if (error instanceof DOMException && error.name === "AbortError") {
+			} catch (error:unknown) {
+				if (error instanceof DOMException && error.name === "AbortError")
 					return "Search aborted by user.";
+				if (error instanceof Error) {
+					warn(`Error during search: ${error.message}`);
+					return `Error: ${error.message}`;
 				}
-				console.error(error);
-				warn(`Error during search: ${error.message}`);
-				return `Error: ${error.message}`;
+				return "Unknown error occurred during search.";
 			}
 		},
 	});
 
 
+	const imageAnalysisTool = tool({
+		name: "Image Analysis",
+		description: "Analyze one or more locally downloaded images using the current vision model. Pass paths returned by Image Search. Returns an error if the current model does not support vision. Analysis takes time, use when relevant.",
+		parameters: {
+			paths: z.array(z.string()).min(1).describe("Image paths as returned by Image Search"),
+			wordsPerImage: z.number().int().min(0).max(1000).optional().describe("How long each image's description should be, in words. About 100 divided by the number of images is a good target (e.g. ~10 words each for 10 images)."),
+			focus: z.string().optional().describe("What to focus on when analyzing. Defaults to a detailed general description."),
+		},
+		implementation: async ({ paths, wordsPerImage, focus }, { status, warn }) => {
+			try {
+				const model = await ctl.client.llm.model();
+				if (!model.vision)
+					return "Error: The current model does not support vision. Load a vision-capable model to analyze images.";
+				const workingDirectory = ctl.getWorkingDirectory();
+				let prompt = focus ?? "Describe this image. Start with its type (photo, illustration, screenshot, texture, icon, diagram, etc.), describe the style, setting, function, and surroundings, then focus on the main subject in great detail followed by any other notable details. No introductory phrases. If in doubt about the type, name all that apply with the most likely option first.";
+				if (wordsPerImage && !/\d+\s*(word|token|sentence)s?/i.test(prompt))
+					prompt += ` Keep the response to roughly ${wordsPerImage} words.`;
+				const maxTokens = wordsPerImage ? Math.round(wordsPerImage / 0.75 * 2) : 1024;
+				// Some reasoning models leak their hidden thinking into the output; keep only the final answer.
+				const stripReasoning = (text:string):string | null => {
+					text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+					const openIdx = text.indexOf('<|channel>');
+					if (openIdx === -1) return text || null;
+					const closeIdx = text.indexOf('<channel|>');
+					const after = closeIdx !== -1 ? text.slice(closeIdx + '<channel|>'.length).trim() : '';
+					if (after) return after;
+					// Nothing after the closing tag (or none present) — fall back to the content inside the block
+					const insideStart = openIdx + '<|channel>'.length;
+					const insideEnd = closeIdx !== -1 ? closeIdx : text.length;
+					return text.slice(insideStart, insideEnd).replace(/^\w+\n/, '').trim() || null;
+				};
+				status(`Analyzing ${paths.length} image${paths.length > 1 ? "s" : ""}...`);
+				return await Promise.all(paths.map(async (imagePath, i) => {
+					const src = imagePath.replace(/^!\[[^\]]*\]\(/, '').replace(/\)$/, '').trim();
+					const filename = src.split('/').pop()!;
+					const alt = imagePath.match(/^!\[([^\]]*)\]/)?.[1] ?? `Image ${i + 1}`;
+					const absolutePath = join(workingDirectory, filename);
+					try {
+						const fileHandle = await ctl.client.files.prepareImage(absolutePath);
+						const result = await model.respond([{
+							role: "user",
+							content: prompt,
+							images: [fileHandle],
+						}], { maxTokens });
+						return { path: "!" + toMarkdownLink(alt, src), analysis: stripReasoning(result.content) };
+					} catch (error: unknown) {
+						if (error instanceof Error)
+							warn(`Failed to analyze image ${i + 1}: ${error.message}`);
+						return { path: "!" + toMarkdownLink(alt, src), analysis: null };
+					}
+				}));
+			} catch (error: unknown) {
+				if (error instanceof DOMException && error.name === "AbortError")
+					return "Analysis aborted by user.";
+				if (error instanceof Error)
+					return `Error: ${error.message}`;
+				return "Unknown error occurred during analysis.";
+			}
+		},
+	});
+
 	tools.push(duckDuckGoWebSearchTool);
 	tools.push(duckDuckGoImageSearchTool);
+	tools.push(imageAnalysisTool);
 	return tools;
 }
 
 const undefinedIfAuto = (value:unknown, autoValue:unknown) =>
 	value === autoValue ? undefined : value as undefined;
 
+const toMarkdownLink = (text:string, url:string):string => {
+	const safeText = text
+		.replace(/\\/g, '\\\\')
+		.replace(/[\[\]]/g, '\\$&')
+		.replace(/\s+/g, ' ')
+		.trim();
+	const safeUrl = url.trim().replace(/[()\s]/g, encodeURIComponent);
+	return `[${safeText}](${safeUrl})`;
+};
 function extractVqd(html:string) {
 	return html.match(/name="vqd"[^>]*value="([^"]+)"/)?.[1]
 		?? html.match(/vqd="([^"]+)"/)?.[1]

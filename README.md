@@ -29,4 +29,4 @@ This plugin works well in combination with the [Visit Website Tool](https://gith
 ## Credits
 [Michal S.](https://github.com/swiatek25) for fixes to the image and web search request headers.
 
-[vadimfedenko](https://lmstudio.ai/vadimfedenko) for various bug fixes.
+[vadimfedenko](https://lmstudio.ai/vadimfedenko) for various bug fixes and the Analyze Image tool approach.
