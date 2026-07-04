@@ -1,8 +1,15 @@
 import { tool, Tool, ToolsProviderController } from "@lmstudio/sdk";
 import { z } from "zod";
-import { join } from "path";
-import { writeFile } from "fs/promises";
 import { configSchematics } from "./config";
+import {
+	altFromImageUrl,
+	analyzeImages,
+	buildAnalysisPrompt,
+	computeMaxTokens,
+	downloadImages,
+	resolveImageAnalysisSystem,
+	resolveVisionModel,
+} from "./imageVision";
 
 
 export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]> {
@@ -17,11 +24,11 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 		if (difference < TIME_BETWEEN_REQUESTS)
 			return new Promise(resolve => setTimeout(resolve, TIME_BETWEEN_REQUESTS - difference));
 		return Promise.resolve();
-	}
-	
+	};
+
 	const duckDuckGoWebSearchTool = tool({
 		name: "Web Search",
-		description: "Search for web pages on DuckDuckGo using a query string and return a list of URLs.",
+		description: "Search DuckDuckGo for web pages. Returns `links` as `[label, url]` pairs plus `count` and `page`. Write links into your reply as `[label](url)` markdown (not in a code block) when sharing results with the user.",
 		parameters: {
 			query: z.string().describe("The search query for finding web pages"),
 			pageSize: z.number().int().min(1).max(10).optional().describe("Number of web results per page"),
@@ -38,7 +45,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				safeSearch = undefinedIfAuto(ctl.getPluginConfig(configSchematics).get("safeSearch"), "auto")
 					?? safeSearch
 					?? "moderate";
-				
+
 				// Construct the DuckDuckGo API URL
 				const url = "https://html.duckduckgo.com/html/";
 				const headers = { ...spoofHeaders(), "Content-Type": "application/x-www-form-urlencoded", "Referer": url };
@@ -81,7 +88,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				}
 
 				// Extract web results using regex
-				const links: [string, string][] = [];
+				const links:[string, string][] = [];
 				const regex = /\shref="[^"]*(https?[^?&"]+)[^>]*>([\s\S]*?)<\/a>/gm;
 				let match;
 				while (links.length < pageSize && (match = regex.exec(html))) {
@@ -95,7 +102,8 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 					return "No web pages found for the query.";
 				status(`Found ${links.length} web pages.`);
 				return { links, count: links.length, page };
-			} catch (error:unknown) {
+			}
+			catch (error:unknown) {
 				if (error instanceof DOMException && error.name === "AbortError")
 					return "Search aborted by user.";
 				if (error instanceof Error) {
@@ -109,7 +117,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 
 	const duckDuckGoImageSearchTool = tool({
 		name: "Image Search",
-		description: "Search for images on DuckDuckGo using a query string. Downloads matching images into the chat working directory and returns markdown image references (![alt](path)). Write each returned line directly into your reply as plain markdown (not in a code blocks) so the images display inline.",
+		description: "Search DuckDuckGo for images and download matches into the chat working directory. Returns `![alt](filename)` markdown strings (paths are relative to the working directory) with alt text from the result title or image filename, to be written directly into your reply for display (not in a code block).",
 		parameters: {
 			query: z.string().describe("The search query for finding images"),
 			pageSize: z.number().int().min(1).max(10).optional().default(10).describe("Number of image results per page"),
@@ -126,7 +134,7 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 				safeSearch = undefinedIfAuto(ctl.getPluginConfig(configSchematics).get("safeSearch"), "auto")
 					?? safeSearch
 					?? "moderate";
-					
+
 				// // Step 1: Fetch the vqd token
 				const initialUrl = new URL("https://duckduckgo.com/");
 				initialUrl.searchParams.append("q", query);
@@ -168,10 +176,13 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 					const res = await fetch(url.toString(), { method: "GET", signal, headers: spoofHeadersImage() });
 					if (!res.ok)
 						throw new Error(`Failed to fetch image results: ${res.statusText}`);
-					const data = await res.json() as { results: { image:string }[] };
+					const data = await res.json() as { results:{ image:string; title?:string }[] };
 					return (data.results || [])
-						.map(r => r.image)
-						.filter((url):url is string => !!url && /\.(jpg|jpeg|png|gif|webp|avif)$/i.test(url));
+						.filter(r => r.image && /\.(jpg|jpeg|png|gif|webp|avif)$/i.test(r.image))
+						.map((r, i) => ({
+							src: r.image,
+							alt: r.title?.trim() || altFromImageUrl(r.image, `Image ${i + 1}`),
+						}));
 				};
 
 				const offset = pageSize * (page - 1);
@@ -181,62 +192,29 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 					await new Promise(resolve => setTimeout(resolve, 2000));
 					allImages = [...batch1, ...await fetchImgBatch(batch1.length)];
 				}
-				const imageURLs = allImages.slice(offset, offset + pageSize);
+				const imageItems = allImages.slice(offset, offset + pageSize);
 
-				if (imageURLs.length === 0)
+				if (imageItems.length === 0)
 					return "No images found for the query.";
 
-				status(`Found ${imageURLs.length} images. Fetching...`);
+				status(`Found ${imageItems.length} images. Fetching...`);
 
-				// Download images to ensure they are accessible
-				const workingDirectory = ctl.getWorkingDirectory();
-				const timestamp = Date.now();
-				const downloadPromises = imageURLs.map(async (url:string, i:number) => {
-					const index = i + 1;
-					try {
-						const imageResponse = await fetch(url, {
-							method: "GET",
-							signal,
-						});
-						if (!imageResponse.ok) {
-							warn(`Failed to fetch image ${index}: ${imageResponse.statusText}`);
-							return null; // Skip this image if download fails
-						}
-						if (!imageResponse.headers.get('content-type')?.startsWith('image/')) {
-							warn(`Image ${index} is not an image: ${url}`);
-							return null;
-						}
-						const bytes = await imageResponse.bytes();
-						if (bytes.length === 0) {
-							warn(`Image ${index} is empty: ${url}`);
-							return null; // Skip empty images
-						}
-						// save the image to a file in the working directory
-						const fileExtension = /image\/([\w]+)/.exec(imageResponse.headers.get('content-type') || '')?.[1]
-							|| /\.([\w]+)(?:\?.*)$/.exec(url)?.[1] // Extract extension from URL if content type is not available
-							|| 'jpg'; // Default to jpg if no content type
-						const fileName = `${timestamp}-${index}.${fileExtension}`;
-						const filePath = join(workingDirectory, fileName);
-						const localPath = filePath.replace(/\\/g, '/').replace(/^C:/, '') // Normalize path for web compatibility
-						await writeFile(filePath, bytes, 'binary');
-						return localPath;
-					} catch (error:unknown) {
-						if (error instanceof DOMException && error.name === "AbortError")
-							return null; // Skip if download was aborted
-						if (error instanceof Error)
-							warn(`Error fetching image ${index}: ${error.message}`);
-						return null; // Skip this image on error
-					}
-				});
-				const downloadedPaths = await Promise.all(downloadPromises);
-				const result = downloadedPaths.filter(Boolean).map((p, i) => '!' + toMarkdownLink(`Image ${i + 1}`, p!));
+				const result = await downloadImages(
+					ctl,
+					imageItems,
+					status,
+					warn,
+					signal,
+					() => spoofHeadersImage(),
+				);
 				if (result.length === 0) {
-					warn('Error fetching images');
-					return imageURLs;
+					warn("Error fetching images");
+					return imageItems.map(({ src }) => src);
 				}
 				status(`Downloaded ${result.length} images successfully.`);
 				return result;
-			} catch (error:unknown) {
+			}
+			catch (error:unknown) {
 				if (error instanceof DOMException && error.name === "AbortError")
 					return "Search aborted by user.";
 				if (error instanceof Error) {
@@ -249,58 +227,32 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 	});
 
 
+	const getImageAnalysisSystem = () =>
+		resolveImageAnalysisSystem(
+			ctl.getPluginConfig(configSchematics).get("imageAnalysisSystemPrompt"),
+		);
+
 	const imageAnalysisTool = tool({
 		name: "Image Analysis",
-		description: "Analyze one or more locally downloaded images using the current vision model. Pass paths returned by Image Search. Returns an error if the current model does not support vision. Analysis takes time, use when relevant.",
+		description: "Analyze locally downloaded images with a vision-capable model. Pass paths from Image Search and receive a list of objects with:\n- `image` markdown to write directly into the reply (not in a code block) for displaying the image\n- `analysis` of the image, powered by a local vision model. Can take time when analyzing many images or long descriptions.",
 		parameters: {
-			paths: z.array(z.string()).min(1).describe("Image paths as returned by Image Search"),
-			wordsPerImage: z.number().int().min(0).max(1000).optional().describe("How long each image's description should be, in words. About 100 divided by the number of images is a good target (e.g. ~10 words each for 10 images)."),
+			images: z.array(z.string()).min(1).describe("Image markdown or paths as returned by Image Search (e.g. ![alt](k1.webp))"),
+			wordsPerImage: z.number().int().min(0).max(1000).optional().describe("How long each image's analysis should be, in words. Affects analysis time. When in doubt, a good target is about 100 / imageCount e.g. 30 for 3 images, 20 for 5 images."),
 			focus: z.string().optional().describe("What to focus on when analyzing. Defaults to a detailed general description."),
 		},
-		implementation: async ({ paths, wordsPerImage, focus }, { status, warn }) => {
+		implementation: async ({ images, wordsPerImage, focus }, { status, warn }) => {
 			try {
-				const model = await ctl.client.llm.model();
-				if (!model.vision)
-					return "Error: The current model does not support vision. Load a vision-capable model to analyze images.";
-				const workingDirectory = ctl.getWorkingDirectory();
-				let prompt = focus ?? "Describe this image. Start with its type (photo, illustration, screenshot, texture, icon, diagram, etc.), describe the style, setting, function, and surroundings, then focus on the main subject in great detail followed by any other notable details. No introductory phrases. If in doubt about the type, name all that apply with the most likely option first.";
-				if (wordsPerImage && !/\d+\s*(word|token|sentence)s?/i.test(prompt))
-					prompt += ` Keep the response to roughly ${wordsPerImage} words.`;
-				const maxTokens = wordsPerImage ? Math.round(wordsPerImage / 0.75 * 2) : 1024;
-				// Some reasoning models leak their hidden thinking into the output; keep only the final answer.
-				const stripReasoning = (text:string):string | null => {
-					text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-					const openIdx = text.indexOf('<|channel>');
-					if (openIdx === -1) return text || null;
-					const closeIdx = text.indexOf('<channel|>');
-					const after = closeIdx !== -1 ? text.slice(closeIdx + '<channel|>'.length).trim() : '';
-					if (after) return after;
-					// Nothing after the closing tag (or none present) — fall back to the content inside the block
-					const insideStart = openIdx + '<|channel>'.length;
-					const insideEnd = closeIdx !== -1 ? closeIdx : text.length;
-					return text.slice(insideStart, insideEnd).replace(/^\w+\n/, '').trim() || null;
-				};
-				status(`Analyzing ${paths.length} image${paths.length > 1 ? "s" : ""}...`);
-				return await Promise.all(paths.map(async (imagePath, i) => {
-					const src = imagePath.replace(/^!\[[^\]]*\]\(/, '').replace(/\)$/, '').trim();
-					const filename = src.split('/').pop()!;
-					const alt = imagePath.match(/^!\[([^\]]*)\]/)?.[1] ?? `Image ${i + 1}`;
-					const absolutePath = join(workingDirectory, filename);
-					try {
-						const fileHandle = await ctl.client.files.prepareImage(absolutePath);
-						const result = await model.respond([{
-							role: "user",
-							content: prompt,
-							images: [fileHandle],
-						}], { maxTokens });
-						return { path: "!" + toMarkdownLink(alt, src), analysis: stripReasoning(result.content) };
-					} catch (error: unknown) {
-						if (error instanceof Error)
-							warn(`Failed to analyze image ${i + 1}: ${error.message}`);
-						return { path: "!" + toMarkdownLink(alt, src), analysis: null };
-					}
-				}));
-			} catch (error: unknown) {
+				const model = await resolveVisionModel(ctl);
+				if (!model)
+					return "Error: No vision-capable model loaded. Load a vision model in LM Studio.";
+				const prompt = buildAnalysisPrompt(focus, wordsPerImage);
+				const maxTokens = computeMaxTokens(wordsPerImage);
+				const result = await analyzeImages(
+					ctl, model, images, getImageAnalysisSystem(), prompt, maxTokens, status, warn,
+				);
+				return typeof result === "string" ? result : result;
+			}
+			catch (error:unknown) {
 				if (error instanceof DOMException && error.name === "AbortError")
 					return "Analysis aborted by user.";
 				if (error instanceof Error)
@@ -319,15 +271,6 @@ export async function toolsProvider(ctl:ToolsProviderController):Promise<Tool[]>
 const undefinedIfAuto = (value:unknown, autoValue:unknown) =>
 	value === autoValue ? undefined : value as undefined;
 
-const toMarkdownLink = (text:string, url:string):string => {
-	const safeText = text
-		.replace(/\\/g, '\\\\')
-		.replace(/[\[\]]/g, '\\$&')
-		.replace(/\s+/g, ' ')
-		.trim();
-	const safeUrl = url.trim().replace(/[()\s]/g, encodeURIComponent);
-	return `[${safeText}](${safeUrl})`;
-};
 function extractVqd(html:string) {
 	return html.match(/name="vqd"[^>]*value="([^"]+)"/)?.[1]
 		?? html.match(/vqd="([^"]+)"/)?.[1]
@@ -355,15 +298,15 @@ const spoofedUserAgents = [
 	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.71 Safari/537.36",
 	"Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:97.0) Gecko/20100101 Firefox/97.0",
 	"Opera/9.80 (Android 7.0; Opera Mini/36.2.2254/119.132; U; id) Presto/2.12.423 Version/12.16",
-]
+];
 
-function spoofHeaders(){
+function spoofHeaders() {
 	return {
 		'User-Agent': spoofedUserAgents[Math.floor(Math.random() * spoofedUserAgents.length)],
 	};
 }
 
-function spoofHeadersImage(){
+function spoofHeadersImage() {
 	return {
 		...spoofHeaders(),
 		'Referer': 'https://duckduckgo.com/',

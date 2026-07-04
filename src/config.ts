@@ -1,4 +1,5 @@
 import { createConfigSchematics } from "@lmstudio/sdk";
+import { IMAGE_ANALYSIS_SYSTEM_DEFAULT } from "./imageVision";
 
 export const configSchematics = createConfigSchematics()
 	.field(
@@ -31,5 +32,16 @@ export const configSchematics = createConfigSchematics()
 			displayName: "Safe Search",
 		},
 		"auto"
+	)
+	.field(
+		"imageAnalysisSystemPrompt",
+		"string",
+		{
+			displayName: "Image Analysis System Prompt",
+			isParagraph: true,
+			placeholder: IMAGE_ANALYSIS_SYSTEM_DEFAULT,
+			hint: "System instruction for the Image Analysis tool. Leave empty for the built-in default.",
+		},
+		""
 	)
 	.build();

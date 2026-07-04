@@ -1,0 +1,34 @@
+{
+	// whitespace
+	"editor.insertSpaces": true,
+	"editor.detectIndentation": false,
+	"editor.tabSize": 4,
+	"editor.indentSize": "tabSize",
+	"files.insertFinalNewline": true,
+	"files.trimTrailingWhitespace": false,
+	"files.eol": "\n",
+	"trailing-spaces.highlightCurrentLine": false,
+	"trailing-spaces.includeEmptyLines": false,
+	"prettier.enable": false,
+	// formatters
+	"[typescript]": {
+		"editor.defaultFormatter": "dbaeumer.vscode-eslint",
+		"editor.formatOnType": false
+	},
+	// eslint
+	"eslint.enable": true,
+	"eslint.useFlatConfig": true,
+	"eslint.workingDirectories": [{ "mode": "auto" }],
+	"eslint.format.enable": true,
+	"eslint.validate": [
+		"javascript",
+		"typescript"
+	],
+	"editor.codeActionsOnSave": {
+		"source.fixAll.eslint": "explicit"
+	},
+	// typescript
+	"typescript.referencesCodeLens.enabled": true,
+	"typescript.implementationsCodeLens.showOnInterfaceMethods": true,
+	"typescript.implementationsCodeLens.enabled": true
+}
